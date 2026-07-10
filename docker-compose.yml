@@ -1,0 +1,7 @@
+services:
+  wps-export:
+    build: .
+    container_name: wps-cloud-export
+    ports:
+      - "5800:5800"
+    restart: unless-stopped

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WPS 云文档下载工具</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+    <div id="login-section" class="section">
+        <div class="login-card">
+            <div class="logo">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <line x1="12" y1="18" x2="12" y2="12"/>
+                    <polyline points="9 15 12 18 15 15"/>
+                </svg>
+                <h1>WPS 云文档下载</h1>
+                <p class="subtitle">批量导出金山文档到本地</p>
+            </div>
+            <div class="login-form">
+                <div class="input-group">
+                    <label for="wps-sid">wps_sid <span class="req">*</span></label>
+                    <input type="text" id="wps-sid" placeholder="从浏览器 Cookie 中获取" autocomplete="off">
+                </div>
+                <div class="input-group">
+                    <label for="csrf">csrf <span class="opt">(可选)</span></label>
+                    <input type="text" id="csrf" placeholder="遇到 403 时填入" autocomplete="off">
+                </div>
+                <button id="btn-login" class="btn btn-primary" onclick="doLogin()">登 录</button>
+                <div class="help-toggle" onclick="toggleHelp()">如何获取 Cookie？</div>
+                <div id="help-content" class="help-content hidden">
+                    <ol>
+                        <li>Chrome 打开 <a href="https://www.kdocs.cn" target="_blank">kdocs.cn</a> 并登录</li>
+                        <li>按 <kbd>F12</kbd> → <strong>Application</strong> → <strong>Cookies</strong></li>
+                        <li>复制 <code>wps_sid</code> 的值</li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="main-section" class="section hidden">
+        <header class="topbar">
+            <div class="topbar-left">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                </svg>
+                <span class="brand">WPS 云文档下载</span>
+            </div>
+            <div class="topbar-right">
+                <img id="user-avatar" class="avatar" src="" alt="">
+                <span id="user-name"></span>
+                <span id="user-vip" class="vip-badge hidden"></span>
+                <span id="storage-info" class="storage"></span>
+                <button class="btn btn-ghost btn-sm" onclick="logout()">退出</button>
+            </div>
+        </header>
+
+        <div class="tabs">
+            <button class="tab active" data-tab="cloud" onclick="switchTab('cloud')">📄 云文档</button>
+            <button class="tab" data-tab="device" onclick="switchTab('device')">💻 设备文档</button>
+        </div>
+
+        <div id="panel-cloud" class="panel">
+            <div class="toolbar">
+                <select id="group-select" onchange="loadGroupFiles()"><option value="">选择文档组...</option></select>
+                <button class="btn btn-sm" onclick="expandAll()">展开</button>
+                <button class="btn btn-sm" onclick="collapseAll()">折叠</button>
+                <button class="btn btn-sm" onclick="selectAll()">全选</button>
+                <button class="btn btn-sm" onclick="deselectAll()">取消</button>
+                <div class="toolbar-right">
+                    <span id="selected-count" class="sel-info">已选 0 个</span>
+                    <button class="btn btn-primary btn-sm" onclick="downloadSelected()" id="btn-download" disabled>下载选中</button>
+                </div>
+            </div>
+            <div id="file-tree" class="file-tree">
+                <div class="empty"><p>选择文档组开始浏览</p></div>
+            </div>
+        </div>
+
+        <div id="panel-device" class="panel hidden">
+            <div class="toolbar">
+                <select id="device-select" onchange="loadDeviceFiles()"><option value="">全部设备</option></select>
+                <button class="btn btn-sm" onclick="selectAllDevice()">全选</button>
+                <button class="btn btn-sm" onclick="deselectAllDevice()">取消</button>
+                <div class="toolbar-right">
+                    <span id="device-selected-count" class="sel-info">已选 0 个</span>
+                    <button class="btn btn-primary btn-sm" onclick="downloadDeviceSelected()" id="btn-download-device" disabled>下载选中</button>
+                </div>
+            </div>
+            <div id="device-files" class="file-list"><div class="empty"><p>加载中...</p></div></div>
+        </div>
+
+        <div id="download-modal" class="modal hidden">
+            <div class="modal-box">
+                <h3>下载进度</h3>
+                <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+                <p id="progress-text">准备中...</p>
+                <div id="progress-log" class="progress-log"></div>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -20,6 +20,61 @@ def err(code, msg):
     return jsonify({"error": msg}), code
 
 
+def collect_group_files(client, group_id, group_name, parent_id=0, path_prefix=""):
+    """递归收集组内所有文件"""
+    files = client.list_files(group_id, parent_id)
+    if isinstance(files, dict) and "error" in files:
+        return []
+    result = []
+    for f in files:
+        fname = f["fname"]
+        ftype = f["ftype"]
+        current_path = f"{path_prefix}/{fname}" if path_prefix else fname
+        if ftype == "folder":
+            result.extend(collect_group_files(client, group_id, group_name, f["id"], current_path))
+        else:
+            result.append({
+                "group_id": group_id,
+                "file_id": f["id"],
+                "name": fname,
+                "type": ftype,
+                "size": f.get("fsize", 0),
+                "path": f"{group_name}/{current_path}",
+                "mtime": f.get("mtime", 0),
+            })
+    return result
+
+
+def collect_device_files(client, device_id, device_name, parent_id=0, path_prefix=""):
+    """递归收集设备内所有文件"""
+    params = {"count": "200", "page": "1"}
+    if parent_id:
+        params["parentid"] = str(parent_id)
+    data = client._get("https://drive.wps.cn/api", f"/v5/groups/tmp/devices/{device_id}/files", params)
+    if isinstance(data, dict) and "error" in data:
+        return []
+    files = data.get("files", [])
+    result = []
+    for f in files:
+        fname = f.get("fname", f.get("name", ""))
+        ftype = f.get("ftype", "file")
+        fid = f.get("id", f.get("fileid", 0))
+        current_path = f"{path_prefix}/{fname}" if path_prefix else fname
+        if ftype == "folder":
+            result.extend(collect_device_files(client, device_id, device_name, fid, current_path))
+        else:
+            result.append({
+                "group_id": 928088999,
+                "file_id": fid,
+                "name": fname,
+                "type": ftype,
+                "size": f.get("fsize", 0),
+                "path": f"设备文档/{device_name}/{current_path}",
+                "mtime": f.get("mtime", 0),
+            })
+    return result
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -219,6 +274,132 @@ def batch_progress():
             msg = "" if content else (fname or "下载失败")
             yield f"data: {json.dumps({'current': i + 1, 'total': total, 'file': name, 'status': status, 'msg': msg}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'done': True, 'total': total})}\n\n"
+
+    return Response(generate(), mimetype="text/event-stream")
+
+
+@app.route("/api/collect-all-files")
+def collect_all_files():
+    """收集所有云文档 + 设备文档的文件列表"""
+    client = get_client()
+    if not client:
+        return err(400, "缺少 wps_sid")
+
+    all_files = []
+    groups = client.get_cloud_groups()
+    for gid, ginfo in groups.items():
+        group_name = ginfo["name"]
+        group_id = ginfo["id"]
+        files = collect_group_files(client, group_id, group_name)
+        all_files.extend(files)
+
+    # 设备文档
+    devices = client.get_device_list()
+    if isinstance(devices, list):
+        for d in devices:
+            did = d["id"]
+            dname = f"{d['name']}_{d.get('detail', '')}".rstrip("_")
+            dname = dname.replace("/", "_").replace("\\", "_")
+            dev_files = collect_device_files(client, did, dname)
+            all_files.extend(dev_files)
+
+    total_size = sum(f["size"] for f in all_files)
+    return jsonify({
+        "files": all_files,
+        "total": len(all_files),
+        "total_size": total_size,
+    })
+
+
+@app.route("/api/download-all", methods=["POST"])
+def download_all():
+    """一键下载全部文档，SSE 流式返回进度，最后返回验证结果"""
+    client = get_client()
+    if not client:
+        return err(400, "缺少 wps_sid")
+
+    def generate():
+        import zipfile
+
+        # 1. 收集所有文件
+        yield f"data: {json.dumps({'phase': 'collect', 'msg': '正在扫描文件...'}, ensure_ascii=False)}\n\n"
+
+        all_files = []
+        groups = client.get_cloud_groups()
+        for gid, ginfo in groups.items():
+            group_name = ginfo["name"]
+            group_id = ginfo["id"]
+            files = collect_group_files(client, group_id, group_name)
+            all_files.extend(files)
+
+        # 设备文档
+        yield f"data: {json.dumps({'phase': 'collect', 'msg': '正在扫描设备文档...'}, ensure_ascii=False)}\n\n"
+        devices = client.get_device_list()
+        if isinstance(devices, list):
+            for d in devices:
+                did = d["id"]
+                dname = f"{d['name']}_{d.get('detail', '')}".rstrip("_").replace("/", "_").replace("\\", "_")
+                yield f"data: {json.dumps({'phase': 'collect', 'msg': f'扫描设备: {dname}'}, ensure_ascii=False)}\n\n"
+                dev_files = collect_device_files(client, did, dname)
+                all_files.extend(dev_files)
+
+        total = len(all_files)
+        total_size = sum(f["size"] for f in all_files)
+        yield f"data: {json.dumps({'phase': 'collect_done', 'total': total, 'total_size': total_size, 'msg': f'共 {total} 个文件，{total_size / 1024 / 1024:.1f} MB'}, ensure_ascii=False)}\n\n"
+
+        if total == 0:
+            yield f"data: {json.dumps({'phase': 'done', 'success': 0, 'fail': 0, 'total': 0}, ensure_ascii=False)}\n\n"
+            return
+
+        # 2. 下载并打包
+        yield f"data: {json.dumps({'phase': 'download', 'msg': '开始下载...'}, ensure_ascii=False)}\n\n"
+
+        buf = io.BytesIO()
+        downloaded_names = []
+        success = 0
+        fail = 0
+        errors = []
+
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for i, f in enumerate(all_files):
+                content, fname = client.download_file(f["group_id"], f["file_id"])
+                if content:
+                    zf.writestr(f["path"], content)
+                    downloaded_names.append(f["path"])
+                    success += 1
+                else:
+                    fail += 1
+                    errors.append({"name": f["name"], "error": fname or "下载失败"})
+
+                yield f"data: {json.dumps({'phase': 'progress', 'current': i + 1, 'total': total, 'file': f['name'], 'status': 'ok' if content else 'error', 'size': len(content) if content else 0}, ensure_ascii=False)}\n\n"
+
+        # 3. 验证：对比线上列表和 ZIP 内容
+        yield f"data: {json.dumps({'phase': 'verify', 'msg': '正在核对文件...'}, ensure_ascii=False)}\n\n"
+
+        online_set = set(f["path"] for f in all_files)
+        downloaded_set = set(downloaded_names)
+
+        missing = online_set - downloaded_set   # 线上有但没下载到的
+        extra = downloaded_set - online_set      # 下载了但线上没有的（理论上不会有）
+
+        verify_result = {
+            "online_count": len(all_files),
+            "downloaded_count": len(downloaded_names),
+            "missing_count": len(missing),
+            "extra_count": len(extra),
+            "missing_files": sorted(list(missing))[:50],  # 最多显示50个
+            "match": len(missing) == 0 and len(extra) == 0,
+        }
+
+        # 4. 发送 ZIP
+        buf.seek(0)
+        zip_data = buf.getvalue()
+        zip_b64 = __import__("base64").b64encode(zip_data).decode()
+
+        yield f"data: {json.dumps({'phase': 'done', 'success': success, 'fail': fail, 'total': total, 'zip_size': len(zip_data), 'verify': verify_result, 'errors': errors[:20]}, ensure_ascii=False)}\n\n"
+
+        # 5. 发送 ZIP 数据（base64）
+        yield f"data: {json.dumps({'phase': 'zip', 'data': zip_b64}, ensure_ascii=False)}\n\n"
 
     return Response(generate(), mimetype="text/event-stream")
 

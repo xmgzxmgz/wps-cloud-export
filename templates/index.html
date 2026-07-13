@@ -74,7 +74,15 @@
                 <button class="btn btn-sm" onclick="deselectAll()">取消</button>
                 <div class="toolbar-right">
                     <span id="selected-count" class="sel-info">已选 0 个</span>
-                    <button class="btn btn-primary btn-sm" onclick="downloadSelected()" id="btn-download" disabled>下载选中</button>
+                    <button class="btn btn-primary btn-sm" onclick="downloadSelected()" id="btn-download" disabled>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        下载选中
+                    </button>
+                    <div class="h-5 w-px bg-border"></div>
+                    <button class="btn btn-sm bg-emerald-600 text-white hover:bg-emerald-700 border-0" onclick="downloadAll()" id="btn-download-all">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        一键下载全部
+                    </button>
                 </div>
             </div>
             <div id="file-tree" class="file-tree">
@@ -95,12 +103,27 @@
             <div id="device-files" class="file-list"><div class="empty"><p>加载中...</p></div></div>
         </div>
 
-        <div id="download-modal" class="modal hidden">
-            <div class="modal-box">
-                <h3>下载进度</h3>
-                <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
-                <p id="progress-text">准备中...</p>
-                <div id="progress-log" class="progress-log"></div>
+        <div id="download-modal" class="fixed inset-0 z-50 hidden">
+            <div class="fixed inset-0 bg-black/80" onclick="closeModal()"></div>
+            <div class="fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2">
+                <div class="rounded-lg border border-border bg-background p-6 shadow-lg animate-in">
+                    <div class="mb-4">
+                        <h2 class="text-lg font-semibold tracking-tight" id="modal-title">下载进度</h2>
+                        <p class="mt-1 text-sm text-muted-foreground" id="progress-subtitle">准备中...</p>
+                    </div>
+                    <div class="mb-4 h-2 w-full overflow-hidden rounded-full bg-secondary">
+                        <div id="progress-fill" class="h-full w-0 rounded-full bg-foreground progress-stripe transition-all duration-300"></div>
+                    </div>
+                    <p id="progress-text" class="mb-3 text-sm text-muted-foreground"></p>
+                    <div id="progress-log" class="max-h-60 overflow-y-auto rounded-md border border-border bg-secondary/50 p-3 font-mono text-xs leading-relaxed"></div>
+                    <div id="verify-report" class="hidden mt-4 rounded-md border border-border p-4">
+                        <h4 class="text-sm font-medium mb-2">📊 核对报告</h4>
+                        <div id="verify-content" class="text-sm space-y-1"></div>
+                    </div>
+                    <div class="mt-4 flex justify-end">
+                        <button onclick="closeModal()" class="inline-flex h-9 items-center rounded-md border border-border bg-transparent px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground">关闭</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

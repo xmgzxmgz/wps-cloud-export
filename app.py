@@ -20,8 +20,10 @@ def err(code, msg):
     return jsonify({"error": msg}), code
 
 
-def collect_group_files(client, group_id, group_name, parent_id=0, path_prefix=""):
+def collect_group_files(client, group_id, group_name, parent_id=0, path_prefix="", seen=None):
     """递归收集组内所有文件"""
+    if seen is None:
+        seen = {}
     files = client.list_files(group_id, parent_id)
     if isinstance(files, dict) and "error" in files:
         return []
@@ -31,22 +33,31 @@ def collect_group_files(client, group_id, group_name, parent_id=0, path_prefix="
         ftype = f["ftype"]
         current_path = f"{path_prefix}/{fname}" if path_prefix else fname
         if ftype == "folder":
-            result.extend(collect_group_files(client, group_id, group_name, f["id"], current_path))
+            result.extend(collect_group_files(client, group_id, group_name, f["id"], current_path, seen))
         else:
+            full_path = f"{group_name}/{current_path}"
+            if full_path in seen:
+                seen[full_path] += 1
+                base, ext = os.path.splitext(full_path)
+                full_path = f"{base}_{seen[full_path]}{ext}"
+            else:
+                seen[full_path] = 0
             result.append({
                 "group_id": group_id,
                 "file_id": f["id"],
                 "name": fname,
                 "type": ftype,
                 "size": f.get("fsize", 0),
-                "path": f"{group_name}/{current_path}",
+                "path": full_path,
                 "mtime": f.get("mtime", 0),
             })
     return result
 
 
-def collect_device_files(client, device_id, device_name, parent_id=0, path_prefix=""):
+def collect_device_files(client, device_id, device_name, parent_id=0, path_prefix="", seen=None):
     """递归收集设备内所有文件"""
+    if seen is None:
+        seen = {}
     params = {"count": "200", "page": "1"}
     if parent_id:
         params["parentid"] = str(parent_id)
@@ -61,15 +72,23 @@ def collect_device_files(client, device_id, device_name, parent_id=0, path_prefi
         fid = f.get("id", f.get("fileid", 0))
         current_path = f"{path_prefix}/{fname}" if path_prefix else fname
         if ftype == "folder":
-            result.extend(collect_device_files(client, device_id, device_name, fid, current_path))
+            result.extend(collect_device_files(client, device_id, device_name, fid, current_path, seen))
         else:
+            full_path = f"设备文档/{device_name}/{current_path}"
+            # 去重：同名文件加后缀
+            if full_path in seen:
+                seen[full_path] += 1
+                base, ext = os.path.splitext(full_path)
+                full_path = f"{base}_{seen[full_path]}{ext}"
+            else:
+                seen[full_path] = 0
             result.append({
                 "group_id": 928088999,
                 "file_id": fid,
                 "name": fname,
                 "type": ftype,
                 "size": f.get("fsize", 0),
-                "path": f"设备文档/{device_name}/{current_path}",
+                "path": full_path,
                 "mtime": f.get("mtime", 0),
             })
     return result
@@ -286,11 +305,12 @@ def collect_all_files():
         return err(400, "缺少 wps_sid")
 
     all_files = []
+    seen = {}  # 全局去重
     groups = client.get_cloud_groups()
     for gid, ginfo in groups.items():
         group_name = ginfo["name"]
         group_id = ginfo["id"]
-        files = collect_group_files(client, group_id, group_name)
+        files = collect_group_files(client, group_id, group_name, seen=seen)
         all_files.extend(files)
 
     # 设备文档
@@ -300,10 +320,22 @@ def collect_all_files():
             did = d["id"]
             dname = f"{d['name']}_{d.get('detail', '')}".rstrip("_")
             dname = dname.replace("/", "_").replace("\\", "_")
-            dev_files = collect_device_files(client, did, dname)
+            dev_files = collect_device_files(client, did, dname, seen=seen)
             all_files.extend(dev_files)
 
     total_size = sum(f["size"] for f in all_files)
+
+    # 最终去重：同名文件加后缀
+    path_count = {}
+    for f in all_files:
+        p = f["path"]
+        if p in path_count:
+            path_count[p] += 1
+            base, ext = os.path.splitext(p)
+            f["path"] = f"{base}_{path_count[p]}{ext}"
+        else:
+            path_count[p] = 0
+
     return jsonify({
         "files": all_files,
         "total": len(all_files),
@@ -325,11 +357,12 @@ def download_all():
         yield f"data: {json.dumps({'phase': 'collect', 'msg': '正在扫描文件...'}, ensure_ascii=False)}\n\n"
 
         all_files = []
+        seen = {}
         groups = client.get_cloud_groups()
         for gid, ginfo in groups.items():
             group_name = ginfo["name"]
             group_id = ginfo["id"]
-            files = collect_group_files(client, group_id, group_name)
+            files = collect_group_files(client, group_id, group_name, seen=seen)
             all_files.extend(files)
 
         # 设备文档
@@ -340,11 +373,23 @@ def download_all():
                 did = d["id"]
                 dname = f"{d['name']}_{d.get('detail', '')}".rstrip("_").replace("/", "_").replace("\\", "_")
                 yield f"data: {json.dumps({'phase': 'collect', 'msg': f'扫描设备: {dname}'}, ensure_ascii=False)}\n\n"
-                dev_files = collect_device_files(client, did, dname)
+                dev_files = collect_device_files(client, did, dname, seen=seen)
                 all_files.extend(dev_files)
 
         total = len(all_files)
         total_size = sum(f["size"] for f in all_files)
+
+        # 最终去重
+        path_count = {}
+        for f in all_files:
+            p = f["path"]
+            if p in path_count:
+                path_count[p] += 1
+                base, ext = os.path.splitext(p)
+                f["path"] = f"{base}_{path_count[p]}{ext}"
+            else:
+                path_count[p] = 0
+
         yield f"data: {json.dumps({'phase': 'collect_done', 'total': total, 'total_size': total_size, 'msg': f'共 {total} 个文件，{total_size / 1024 / 1024:.1f} MB'}, ensure_ascii=False)}\n\n"
 
         if total == 0:

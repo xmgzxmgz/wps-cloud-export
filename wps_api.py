@@ -26,9 +26,10 @@ class WPSClient:
     def __init__(self, wps_sid: str, csrf: str = ""):
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
-        self.session.cookies.set("wps_sid", wps_sid, domain=".kdocs.cn")
+        cookie_str = f"wps_sid={wps_sid}"
         if csrf:
-            self.session.cookies.set("csrf", csrf, domain=".kdocs.cn")
+            cookie_str += f"; csrf={csrf}"
+        self.session.headers["Cookie"] = cookie_str
 
     def _get(self, base: str, path: str, params: dict = None):
         url = f"{base}{path}"
@@ -127,6 +128,68 @@ class WPSClient:
         if isinstance(data, dict) and "error" in data:
             return data
         return data.get("devices", []) if isinstance(data, dict) else []
+
+    # ── 设备文档（自动上传文档组中的设备文件）──
+
+    def get_device_list(self):
+        """获取自动上传文档组中的设备列表"""
+        data = self._get(DRIVE_BASE, "/v5/groups/tmp/devices", {"count": "200", "getserial": "true", "offset": "0"})
+        if isinstance(data, dict) and "error" in data:
+            return data
+        return data.get("devices", []) if isinstance(data, dict) else []
+
+    def get_device_files(self, device_id: int, offset: int = 0, count: int = 200):
+        """获取某个设备下的文件列表"""
+        params = {"count": str(count), "offset": str(offset)}
+        data = self._get(DRIVE_BASE, f"/v5/groups/tmp/devices/{device_id}/files", params)
+        if isinstance(data, dict) and "error" in data:
+            return data
+        return data.get("files", []) if isinstance(data, dict) else []
+
+    def get_device_files_all(self, device_id: int):
+        """分页获取某个设备下的所有文件"""
+        all_files = []
+        offset = 0
+        while True:
+            files = self.get_device_files(device_id, offset)
+            if isinstance(files, dict) and "error" in files:
+                return files if not all_files else all_files
+            if not files:
+                break
+            all_files.extend(files)
+            if len(files) < 200:
+                break
+            offset += len(files)
+        return all_files
+
+    def get_device_file_tree(self, device_id: int, parent_id: int = 0, depth: int = 0, max_depth: int = 10):
+        """递归获取设备文件树"""
+        if depth > max_depth:
+            return []
+        # 设备文件通过 parentid 获取子文件
+        params = {"parentid": str(parent_id), "count": "200", "page": "1"}
+        data = self._get(DRIVE_BASE, f"/v5/groups/tmp/devices/{device_id}/files", params)
+        if isinstance(data, dict) and "error" in data:
+            return []
+        files = data.get("files", []) if isinstance(data, dict) else []
+        result = []
+        for f in files:
+            node = {
+                "id": f.get("id", f.get("fileid", 0)),
+                "name": f.get("fname", f.get("name", "")),
+                "type": f.get("ftype", "file"),
+                "size": f.get("fsize", 0),
+                "mtime": f.get("mtime", 0),
+                "group_id": 928088999,
+                "parent_id": parent_id,
+            }
+            if node["type"] == "folder":
+                node["children"] = self.get_device_file_tree(device_id, node["id"], depth + 1, max_depth)
+                node["child_count"] = len(node["children"])
+            result.append(node)
+        return result
+
+    # ── 旧版 roaming 接口（兼容）──
 
     def get_roaming_files(self, count: int = 100, device_id: str = None, mtime=None):
         params = {"count": count, "include": "group_type"}

@@ -20,14 +20,11 @@ function apiHeaders() {
 }
 
 async function api(path, opts = {}) {
-    const resp = await fetch(path, {
-        headers: apiHeaders(),
-        ...opts,
-    });
-    const data = await resp.json();
-    if (!resp.ok) {
-        throw new Error(data.error || `HTTP ${resp.status}`);
-    }
+    const resp = await fetch(path, { headers: apiHeaders(), ...opts });
+    const text = await resp.text();
+    let data;
+    try { data = JSON.parse(text); } catch { throw new Error(`服务器返回了非 JSON 响应 (${resp.status})`); }
+    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
     return data;
 }
 
@@ -50,7 +47,7 @@ async function doLogin() {
     btn.textContent = "验证中...";
 
     try {
-        const data = await api("/api/login");
+        const data = await api("/api/login", { method: "POST" });
         showMainPanel(data);
     } catch (e) {
         alert("登录失败: " + e.message);
@@ -344,16 +341,15 @@ function syncAllCheckboxes(checked) {
 
 async function loadDevices() {
     try {
-        const data = await api("/api/devices");
+        const data = await api("/api/device-list");
         state.devices = data.devices || [];
         const select = document.getElementById("device-select");
         state.devices.forEach(d => {
-            const opt = document.createElement("option");
-            opt.value = d.deviceid;
-            opt.textContent = `${d.name} (${d.platform})`;
-            select.appendChild(opt);
+            const sizeStr = d.fsize ? ` (${formatSize(d.fsize)})` : "";
+            const detail = d.detail ? ` - ${d.detail}` : "";
+            select.innerHTML += `<option value="${d.id}">${esc(d.name)}${detail}${sizeStr}</option>`;
         });
-        loadDeviceFiles();
+        if (state.devices.length) loadDeviceFiles();
     } catch (e) {
         console.error("加载设备失败:", e);
     }
@@ -361,74 +357,63 @@ async function loadDevices() {
 
 async function loadDeviceFiles() {
     const container = document.getElementById("device-files");
-    container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    container.innerHTML = '<div class="flex items-center justify-center py-20"><div class="spinner h-6 w-6 rounded-full border-2 border-muted border-t-foreground"></div></div>';
 
     const deviceId = document.getElementById("device-select").value;
-
-    try {
-        const params = deviceId ? `?device_id=${deviceId}&count=200` : "?count=200";
-        const data = await api(`/api/roaming${params}`);
-        state.roamingFiles = data.list || [];
-        state.deviceSelectedFiles.clear();
-        renderDeviceFiles(state.roamingFiles);
-        updateDeviceSelectedCount();
-    } catch (e) {
-        container.innerHTML = `<div class="empty-state"><p>加载失败: ${e.message}</p></div>`;
-    }
-}
-
-function renderDeviceFiles(items) {
-    const container = document.getElementById("device-files");
-    container.innerHTML = "";
-
-    if (!items || items.length === 0) {
-        container.innerHTML = '<div class="empty-state"><p>没有文件</p></div>';
+    if (!deviceId) {
+        container.innerHTML = '<div class="flex flex-col items-center justify-center py-20 text-muted-foreground"><p class="text-sm">请选择设备</p></div>';
         return;
     }
 
-    items.forEach((item, index) => {
-        const roaming = item.roaming || {};
-        const file = item.file || {};
-        const name = roaming.name || `file_${file.fileid}`;
-        const device = roaming.original_device_name || "未知设备";
-        const size = roaming.size || 0;
-
-        const div = document.createElement("div");
-        div.className = "file-item";
-        div.innerHTML = `
-            <input type="checkbox" data-index="${index}"
-                   onchange="toggleDeviceSelect(${index}, this.checked)"
-                   ${state.deviceSelectedFiles.has(index) ? "checked" : ""}>
-            <span class="tree-icon">${getFileIcon(file.ftype || "file")}</span>
-            <span class="file-name" title="${escapeHtml(roaming.path || name)}">${escapeHtml(name)}</span>
-            <span class="file-device">${escapeHtml(device)}</span>
-            <span class="file-size">${formatSize(size)}</span>
-        `;
-        container.appendChild(div);
-    });
+    try {
+        const data = await api(`/api/device-files?device_id=${deviceId}`);
+        state.deviceFiles = data.files || [];
+        state.deviceSelectedFiles.clear();
+        renderDeviceFiles(state.deviceFiles);
+        updateDeviceSelectedCount();
+    } catch (e) {
+        container.innerHTML = `<div class="flex flex-col items-center justify-center py-20 text-muted-foreground"><p class="text-sm">加载失败: ${esc(e.message)}</p></div>`;
+    }
 }
 
-function toggleDeviceSelect(index, checked) {
-    if (checked) {
-        state.deviceSelectedFiles.add(index);
-    } else {
-        state.deviceSelectedFiles.delete(index);
+function renderDeviceFiles(files) {
+    const container = document.getElementById("device-files");
+    if (!files?.length) {
+        container.innerHTML = `<div class="flex flex-col items-center justify-center py-20 text-muted-foreground"><p class="text-sm">该设备没有文件</p></div>`;
+        return;
     }
+
+    container.innerHTML = `<div class="space-y-0.5">${files.map((f, i) => {
+        const name = f.fname || f.name || `file_${f.id || f.fileid}`;
+        const size = f.fsize || 0;
+        const ftype = f.ftype || "file";
+        const fid = f.id || f.fileid;
+        const isFolder = ftype === "folder";
+        return `<div class="device-row">
+            <input type="checkbox" data-idx="${i}" data-id="${fid}" data-group="928088999"
+                   class="h-3.5 w-3.5 rounded-sm border border-input bg-background shadow-sm accent-foreground cursor-pointer flex-shrink-0"
+                   onchange="toggleDeviceSelect(${i}, this.checked)" ${state.deviceSelectedFiles.has(i) ? "checked" : ""}>
+            <span class="flex-shrink-0">${isFolder ? folderIcon() : fileIcon(ftype)}</span>
+            <span class="flex-1 truncate text-sm" title="${esc(name)}">${esc(name)}</span>
+            <span class="flex-shrink-0 text-xs text-muted-foreground w-16 text-right">${formatSize(size)}</span>
+        </div>`;
+    }).join("")}</div>`;
+}
+
+function toggleDeviceSelect(idx, checked) {
+    if (checked) state.deviceSelectedFiles.add(idx); else state.deviceSelectedFiles.delete(idx);
     updateDeviceSelectedCount();
 }
-
 function updateDeviceSelectedCount() {
-    const count = state.deviceSelectedFiles.size;
-    document.getElementById("device-selected-count").textContent = `已选 ${count} 个文件`;
-    document.getElementById("btn-download-device").disabled = count === 0;
+    const n = state.deviceSelectedFiles.size;
+    document.getElementById("device-selected-count").textContent = `已选 ${n} 个文件`;
+    document.getElementById("btn-download-device").disabled = n === 0;
 }
-
 function selectAllDevice() {
-    state.roamingFiles.forEach((_, i) => state.deviceSelectedFiles.add(i));
+    (state.deviceFiles || []).forEach((_, i) => state.deviceSelectedFiles.add(i));
     document.querySelectorAll("#device-files input[type=checkbox]").forEach(cb => cb.checked = true);
     updateDeviceSelectedCount();
 }
-
 function deselectAllDevice() {
     state.deviceSelectedFiles.clear();
     document.querySelectorAll("#device-files input[type=checkbox]").forEach(cb => cb.checked = false);
@@ -474,15 +459,16 @@ function collectSelectedFiles(nodes, groupId, parentPath) {
 async function downloadDeviceSelected() {
     const items = [];
     state.deviceSelectedFiles.forEach(index => {
-        const item = state.roamingFiles[index];
-        if (!item) return;
-        const roaming = item.roaming || {};
-        const file = item.file || {};
+        const f = (state.deviceFiles || [])[index];
+        if (!f) return;
+        const fid = f.id || f.fileid;
+        const fname = f.fname || f.name || `file_${fid}`;
+        if (f.ftype === "folder") return; // 跳过文件夹
         items.push({
-            group_id: file.groupid || roaming.groupid,
-            file_id: file.fileid || parseInt(roaming.fileid),
-            name: roaming.name || `file_${file.fileid}`,
-            path: roaming.name || `file_${file.fileid}`,
+            group_id: 928088999,  // tmp 组
+            file_id: fid,
+            name: fname,
+            path: fname,
         });
     });
 

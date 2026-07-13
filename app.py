@@ -108,6 +108,55 @@ def roaming():
     return jsonify(data)
 
 
+@app.route("/api/device-list")
+def device_list():
+    """获取自动上传文档中的设备列表"""
+    client = get_client()
+    if not client:
+        return err(400, "缺少 wps_sid")
+    devs = client.get_device_list()
+    if isinstance(devs, dict) and "error" in devs:
+        return err(400, devs.get("message", "获取设备列表失败"))
+    return jsonify({"devices": devs})
+
+
+@app.route("/api/device-files")
+def device_files():
+    """获取某个设备下的文件"""
+    client = get_client()
+    if not client:
+        return err(400, "缺少 wps_sid")
+    device_id = request.args.get("device_id", type=int)
+    parent_id = request.args.get("parent_id", 0, type=int)
+    if not device_id:
+        return err(400, "缺少 device_id")
+    # 如果指定了 parent_id，获取子文件
+    if parent_id:
+        params = {"parentid": str(parent_id), "count": "200", "page": "1"}
+        data = client._get("https://drive.wps.cn/api", f"/v5/groups/tmp/devices/{device_id}/files", params)
+        if isinstance(data, dict) and "error" in data:
+            return err(400, data.get("message"))
+        files = data.get("files", [])
+    else:
+        files = client.get_device_files_all(device_id)
+        if isinstance(files, dict) and "error" in files:
+            return err(400, files.get("message"))
+    return jsonify({"files": files})
+
+
+@app.route("/api/device-tree")
+def device_tree():
+    """获取设备文件树"""
+    client = get_client()
+    if not client:
+        return err(400, "缺少 wps_sid")
+    device_id = request.args.get("device_id", type=int)
+    if not device_id:
+        return err(400, "缺少 device_id")
+    tree = client.get_device_file_tree(device_id)
+    return jsonify({"tree": tree})
+
+
 @app.route("/api/download")
 def download():
     client = get_client()

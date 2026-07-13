@@ -9,8 +9,8 @@ app = Flask(__name__)
 
 
 def get_client():
-    wps_sid = request.headers.get("X-WPS-SID", "")
-    csrf = request.headers.get("X-WPS-CSRF", "")
+    wps_sid = request.headers.get("X-WPS-SID") or request.args.get("sid", "")
+    csrf = request.headers.get("X-WPS-CSRF") or request.args.get("csrf", "")
     if not wps_sid:
         return None
     return WPSClient(wps_sid, csrf)
@@ -343,7 +343,7 @@ def collect_all_files():
     })
 
 
-@app.route("/api/download-all", methods=["POST"])
+@app.route("/api/download-all", methods=["GET", "POST"])
 def download_all():
     """一键下载全部文档，SSE 流式返回进度，最后返回验证结果"""
     client = get_client()

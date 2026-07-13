@@ -605,104 +605,91 @@ async function downloadAll() {
     verifyReport.classList.add("hidden");
     verifyContent.innerHTML = "";
 
-    try {
-        const resp = await fetch("/api/download-all", { method: "POST", headers: apiHeaders() });
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = "";
-        let zipData = null;
+    // 用 EventSource (原生 SSE) 实现实时进度
+    const params = new URLSearchParams({ sid: state.wpsSid, csrf: state.csrf });
+    const es = new EventSource(`/api/download-all?${params}`);
 
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += decoder.decode(value, { stream: true });
-            const lines = buf.split("\n");
-            buf = lines.pop() || "";
+    es.onmessage = (e) => {
+        try {
+            const d = JSON.parse(e.data);
 
-            for (const line of lines) {
-                if (!line.startsWith("data: ")) continue;
-                try {
-                    const d = JSON.parse(line.slice(6));
-
-                    if (d.phase === "collect") {
-                        sub.textContent = d.msg;
-                    }
-                    else if (d.phase === "collect_done") {
-                        sub.textContent = d.msg;
-                        log.innerHTML += `<div class="text-muted-foreground">📁 ${d.msg}</div>`;
-                    }
-                    else if (d.phase === "download") {
-                        sub.textContent = d.msg;
-                    }
-                    else if (d.phase === "progress") {
-                        const pct = Math.round((d.current / d.total) * 100);
-                        fill.style.width = pct + "%";
-                        text.textContent = `${d.current} / ${d.total}`;
-                        sub.textContent = d.file;
-                        const cls = d.status === "ok" ? "text-emerald-400" : "text-red-400";
-                        const icon = d.status === "ok" ? "✓" : "✗";
-                        log.innerHTML += `<div class="${cls}">${icon} ${esc(d.file)}</div>`;
-                        log.scrollTop = log.scrollHeight;
-                    }
-                    else if (d.phase === "verify") {
-                        sub.textContent = d.msg;
-                        log.innerHTML += `<div class="text-blue-400 mt-2">🔍 ${d.msg}</div>`;
-                    }
-                    else if (d.phase === "done") {
-                        fill.classList.remove("progress-stripe");
-                        fill.style.width = "100%";
-                        text.textContent = `完成 ✓`;
-                        sub.textContent = `成功 ${d.success} / ${d.total}，失败 ${d.fail}`;
-
-                        // 显示核对报告
-                        if (d.verify) {
-                            verifyReport.classList.remove("hidden");
-                            const v = d.verify;
-                            const matchIcon = v.match ? "✅" : "⚠️";
-                            verifyContent.innerHTML = `
-                                <div class="flex justify-between"><span>线上文件数</span><span class="font-mono">${v.online_count}</span></div>
-                                <div class="flex justify-between"><span>下载成功数</span><span class="font-mono">${v.downloaded_count}</span></div>
-                                <div class="flex justify-between"><span>缺失文件数</span><span class="font-mono ${v.missing_count > 0 ? 'text-red-400' : ''}">${v.missing_count}</span></div>
-                                <div class="mt-2 font-medium">${matchIcon} ${v.match ? '核对一致，全部文件已下载' : `有 ${v.missing_count} 个文件未下载成功`}</div>
-                                ${v.missing_files.length > 0 ? `<div class="mt-2 text-xs text-muted-foreground">缺失文件：${v.missing_files.slice(0, 10).map(f => esc(f)).join('<br>')}</div>` : ''}
-                            `;
-                        }
-
-                        if (d.errors?.length) {
-                            log.innerHTML += `<div class="text-red-400 mt-2">失败文件：</div>`;
-                            d.errors.forEach(e => {
-                                log.innerHTML += `<div class="text-red-400">  ✗ ${esc(e.name)} — ${esc(e.error)}</div>`;
-                            });
-                        }
-
-                        // 保存 ZIP
-                        if (d.zip_size > 0) {
-                            sub.textContent += ` | ${formatSize(d.zip_size)}`;
-                        }
-                    }
-                    else if (d.phase === "zip" && d.data) {
-                        // 接收 base64 ZIP 数据并下载
-                        const binary = atob(d.data);
-                        const bytes = new Uint8Array(binary.length);
-                        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                        const blob = new Blob([bytes], { type: "application/zip" });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement("a");
-                        a.href = url;
-                        a.download = `wps_backup_${new Date().toISOString().slice(0, 10)}.zip`;
-                        a.click();
-                        URL.revokeObjectURL(url);
-                        log.innerHTML += `<div class="text-emerald-400 mt-2">💾 ZIP 文件已保存</div>`;
-                    }
-                } catch {}
+            if (d.phase === "collect") {
+                sub.textContent = d.msg;
             }
-        }
-    } catch (e) {
-        sub.textContent = "出错"; text.textContent = e.message;
-    } finally {
+            else if (d.phase === "collect_done") {
+                sub.textContent = d.msg;
+                log.innerHTML += `<div class="text-muted-foreground">📁 ${d.msg}</div>`;
+            }
+            else if (d.phase === "download") {
+                sub.textContent = d.msg;
+            }
+            else if (d.phase === "progress") {
+                const pct = Math.round((d.current / d.total) * 100);
+                fill.style.width = pct + "%";
+                text.textContent = `${d.current} / ${d.total}`;
+                sub.textContent = d.file;
+                const cls = d.status === "ok" ? "text-emerald-400" : "text-red-400";
+                const icon = d.status === "ok" ? "✓" : "✗";
+                log.innerHTML += `<div class="${cls}">${icon} ${esc(d.file)}</div>`;
+                log.scrollTop = log.scrollHeight;
+            }
+            else if (d.phase === "verify") {
+                sub.textContent = d.msg;
+                log.innerHTML += `<div class="text-blue-400 mt-2">🔍 ${d.msg}</div>`;
+            }
+            else if (d.phase === "done") {
+                fill.classList.remove("progress-stripe");
+                fill.style.width = "100%";
+                text.textContent = `完成 ✓`;
+                sub.textContent = `成功 ${d.success} / ${d.total}，失败 ${d.fail}`;
+
+                if (d.verify) {
+                    verifyReport.classList.remove("hidden");
+                    const v = d.verify;
+                    const matchIcon = v.match ? "✅" : "⚠️";
+                    verifyContent.innerHTML = `
+                        <div class="flex justify-between"><span>线上文件数</span><span class="font-mono">${v.online_count}</span></div>
+                        <div class="flex justify-between"><span>下载成功数</span><span class="font-mono">${v.downloaded_count}</span></div>
+                        <div class="flex justify-between"><span>缺失文件数</span><span class="font-mono ${v.missing_count > 0 ? 'text-red-400' : ''}">${v.missing_count}</span></div>
+                        <div class="mt-2 font-medium">${matchIcon} ${v.match ? '核对一致，全部文件已下载' : `有 ${v.missing_count} 个文件未下载成功`}</div>
+                        ${v.missing_files.length > 0 ? `<div class="mt-2 text-xs text-muted-foreground">缺失文件：${v.missing_files.slice(0, 10).map(f => esc(f)).join('<br>')}</div>` : ''}
+                    `;
+                }
+
+                if (d.errors?.length) {
+                    log.innerHTML += `<div class="text-red-400 mt-2">失败文件：</div>`;
+                    d.errors.forEach(err => {
+                        log.innerHTML += `<div class="text-red-400">  ✗ ${esc(err.name)} — ${esc(err.error)}</div>`;
+                    });
+                }
+
+                if (d.zip_size > 0) sub.textContent += ` | ${formatSize(d.zip_size)}`;
+                es.close();
+                btn.disabled = false;
+                btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 一键下载全部`;
+            }
+            else if (d.phase === "zip" && d.data) {
+                const binary = atob(d.data);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                const blob = new Blob([bytes], { type: "application/zip" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `wps_backup_${new Date().toISOString().slice(0, 10)}.zip`;
+                a.click();
+                URL.revokeObjectURL(url);
+                log.innerHTML += `<div class="text-emerald-400 mt-2">💾 ZIP 文件已保存</div>`;
+            }
+        } catch {}
+    };
+
+    es.onerror = () => {
+        es.close();
+        sub.textContent = "连接中断";
         btn.disabled = false;
         btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 一键下载全部`;
-    }
+    };
 }
 
 // ── Tabs ──

@@ -596,6 +596,16 @@ function formatSize(bytes) {
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
 }
 
+function folderIcon() {
+    return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+}
+
+function fileIcon(type) {
+    const colors = { kdoc: "#6366f1", docx: "#6366f1", doc: "#6366f1", pdf: "#ef4444", txt: "#a78bfa", ksheet: "#22c55e", xlsx: "#22c55e", xls: "#22c55e", csv: "#22c55e", kslide: "#f59e0b", pptx: "#f59e0b", ppt: "#f59e0b" };
+    const c = colors[type] || "#71717a";
+    return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+}
+
 function getFileIcon(type) {
     const icons = {
         kdoc: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`,
@@ -617,11 +627,12 @@ function getFileIcon(type) {
     return icons.file;
 }
 
-function escapeHtml(str) {
+function esc(str) {
     const div = document.createElement("div");
     div.textContent = str;
     return div.innerHTML;
 }
+const escapeHtml = esc;
 
 // ── Init ──
 

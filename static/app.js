@@ -577,14 +577,27 @@ function closeModal() {
     document.getElementById("verify-report").classList.add("hidden");
 }
 
-// ── Download All ──
+// ── Download All (逐个下载到本地文件夹，支持增量) ──
 
 async function downloadAll() {
     const btn = document.getElementById("btn-download-all");
-    if (!confirm("将下载全部云文档并打包为 ZIP，确认开始？")) return;
+
+    // 检查浏览器支持
+    if (!window.showDirectoryPicker) {
+        alert("你的浏览器不支持 File System Access API，请使用 Chrome 或 Edge");
+        return;
+    }
+
+    // 1. 让用户选择本地文件夹
+    let dirHandle;
+    try {
+        dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+    } catch (e) {
+        return; // 用户取消
+    }
 
     btn.disabled = true;
-    btn.textContent = "下载中...";
+    btn.textContent = "扫描中...";
 
     const modal = document.getElementById("download-modal");
     const fill = document.getElementById("progress-fill");
@@ -600,96 +613,158 @@ async function downloadAll() {
     fill.style.width = "0%";
     fill.className = "h-full w-0 rounded-full bg-foreground progress-stripe transition-all duration-300";
     text.textContent = "";
-    sub.textContent = "正在初始化...";
+    sub.textContent = "正在获取云端文件列表...";
     log.innerHTML = "";
     verifyReport.classList.add("hidden");
     verifyContent.innerHTML = "";
 
-    // 用 EventSource (原生 SSE) 实现实时进度
-    const params = new URLSearchParams({ sid: state.wpsSid, csrf: state.csrf });
-    const es = new EventSource(`/api/download-all?${params}`);
+    try {
+        // 2. 获取云端文件列表
+        const cloudData = await api("/api/collect-all-files");
+        const cloudFiles = cloudData.files;
+        log.innerHTML += `<div class="text-muted-foreground">📁 云端共 ${cloudFiles.length} 个文件，${formatSize(cloudData.total_size)}</div>`;
 
-    es.onmessage = (e) => {
-        try {
-            const d = JSON.parse(e.data);
+        // 3. 扫描本地目录，找出已存在的文件
+        sub.textContent = "正在扫描本地文件...";
+        const localFiles = new Set();
+        await scanLocalDir(dirHandle, "", localFiles);
+        log.innerHTML += `<div class="text-muted-foreground">📂 本地已有 ${localFiles.size} 个文件</div>`;
 
-            if (d.phase === "collect") {
-                sub.textContent = d.msg;
-            }
-            else if (d.phase === "collect_done") {
-                sub.textContent = d.msg;
-                log.innerHTML += `<div class="text-muted-foreground">📁 ${d.msg}</div>`;
-            }
-            else if (d.phase === "download") {
-                sub.textContent = d.msg;
-            }
-            else if (d.phase === "progress") {
-                const pct = Math.round((d.current / d.total) * 100);
-                fill.style.width = pct + "%";
-                text.textContent = `${d.current} / ${d.total}`;
-                sub.textContent = d.file;
-                const cls = d.status === "ok" ? "text-emerald-400" : "text-red-400";
-                const icon = d.status === "ok" ? "✓" : "✗";
-                log.innerHTML += `<div class="${cls}">${icon} ${esc(d.file)}</div>`;
+        // 4. 对比，找出缺失文件
+        const missing = cloudFiles.filter(f => !localFiles.has(f.path));
+        log.innerHTML += `<div class="text-blue-400">🔍 缺失 ${missing.length} 个文件，跳过 ${cloudFiles.length - missing.length} 个</div>`;
+
+        if (missing.length === 0) {
+            sub.textContent = "全部文件已存在，无需下载";
+            fill.style.width = "100%";
+            fill.classList.remove("progress-stripe");
+            verifyReport.classList.remove("hidden");
+            verifyContent.innerHTML = `<div class="text-emerald-400">✅ 全部 ${cloudFiles.length} 个文件已同步</div>`;
+            btn.disabled = false;
+            btn.innerHTML = downloadAllBtnHtml();
+            return;
+        }
+
+        // 5. 逐个下载缺失文件（并发 3 个）
+        sub.textContent = `开始下载 ${missing.length} 个文件...`;
+        let success = 0, fail = 0;
+        const errors = [];
+        const CONCURRENCY = 3;
+        let idx = 0;
+
+        async function downloadOne() {
+            while (idx < missing.length) {
+                const i = idx++;
+                const f = missing[i];
+                try {
+                    await downloadFileToLocal(dirHandle, f);
+                    success++;
+                    const pct = Math.round(((success + fail) / missing.length) * 100);
+                    fill.style.width = pct + "%";
+                    text.textContent = `${success + fail} / ${missing.length}`;
+                    sub.textContent = f.name;
+                    log.innerHTML += `<div class="text-emerald-400">✓ ${esc(f.path)}</div>`;
+                } catch (e) {
+                    fail++;
+                    errors.push({ name: f.name, error: e.message });
+                    log.innerHTML += `<div class="text-red-400">✗ ${esc(f.path)} — ${esc(e.message)}</div>`;
+                }
                 log.scrollTop = log.scrollHeight;
             }
-            else if (d.phase === "verify") {
-                sub.textContent = d.msg;
-                log.innerHTML += `<div class="text-blue-400 mt-2">🔍 ${d.msg}</div>`;
-            }
-            else if (d.phase === "done") {
-                fill.classList.remove("progress-stripe");
-                fill.style.width = "100%";
-                text.textContent = `完成 ✓`;
-                sub.textContent = `成功 ${d.success} / ${d.total}，失败 ${d.fail}`;
+        }
 
-                if (d.verify) {
-                    verifyReport.classList.remove("hidden");
-                    const v = d.verify;
-                    const matchIcon = v.match ? "✅" : "⚠️";
-                    verifyContent.innerHTML = `
-                        <div class="flex justify-between"><span>线上文件数</span><span class="font-mono">${v.online_count}</span></div>
-                        <div class="flex justify-between"><span>下载成功数</span><span class="font-mono">${v.downloaded_count}</span></div>
-                        <div class="flex justify-between"><span>缺失文件数</span><span class="font-mono ${v.missing_count > 0 ? 'text-red-400' : ''}">${v.missing_count}</span></div>
-                        <div class="mt-2 font-medium">${matchIcon} ${v.match ? '核对一致，全部文件已下载' : `有 ${v.missing_count} 个文件未下载成功`}</div>
-                        ${v.missing_files.length > 0 ? `<div class="mt-2 text-xs text-muted-foreground">缺失文件：${v.missing_files.slice(0, 10).map(f => esc(f)).join('<br>')}</div>` : ''}
-                    `;
-                }
+        const workers = [];
+        for (let w = 0; w < CONCURRENCY; w++) workers.push(downloadOne());
+        await Promise.all(workers);
 
-                if (d.errors?.length) {
-                    log.innerHTML += `<div class="text-red-400 mt-2">失败文件：</div>`;
-                    d.errors.forEach(err => {
-                        log.innerHTML += `<div class="text-red-400">  ✗ ${esc(err.name)} — ${esc(err.error)}</div>`;
-                    });
-                }
+        // 6. 保存清单文件
+        const manifest = {
+            timestamp: new Date().toISOString(),
+            total: cloudFiles.length,
+            downloaded: success,
+            failed: fail,
+            files: cloudFiles.map(f => f.path),
+        };
+        await writeJsonFile(dirHandle, "_wps_manifest.json", manifest);
 
-                if (d.zip_size > 0) sub.textContent += ` | ${formatSize(d.zip_size)}`;
-                es.close();
-                btn.disabled = false;
-                btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 一键下载全部`;
-            }
-            else if (d.phase === "zip" && d.data) {
-                const binary = atob(d.data);
-                const bytes = new Uint8Array(binary.length);
-                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                const blob = new Blob([bytes], { type: "application/zip" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `wps_backup_${new Date().toISOString().slice(0, 10)}.zip`;
-                a.click();
-                URL.revokeObjectURL(url);
-                log.innerHTML += `<div class="text-emerald-400 mt-2">💾 ZIP 文件已保存</div>`;
-            }
-        } catch {}
-    };
+        // 7. 完成
+        fill.classList.remove("progress-stripe");
+        fill.style.width = "100%";
+        sub.textContent = `完成：成功 ${success}，失败 ${fail}，跳过 ${cloudFiles.length - missing.length}`;
 
-    es.onerror = () => {
-        es.close();
-        sub.textContent = "连接中断";
+        verifyReport.classList.remove("hidden");
+        verifyContent.innerHTML = `
+            <div class="flex justify-between"><span>云端文件</span><span class="font-mono">${cloudFiles.length}</span></div>
+            <div class="flex justify-between"><span>本地已有</span><span class="font-mono">${cloudFiles.length - missing.length}</span></div>
+            <div class="flex justify-between"><span>本次下载</span><span class="font-mono text-emerald-400">${success}</span></div>
+            <div class="flex justify-between"><span>失败</span><span class="font-mono ${fail > 0 ? 'text-red-400' : ''}">${fail}</span></div>
+            <div class="mt-2 font-medium">${fail === 0 ? '✅ 全部下载成功' : `⚠️ ${fail} 个文件下载失败`}</div>
+        `;
+
+        if (errors.length) {
+            log.innerHTML += `<div class="text-red-400 mt-2">失败列表：</div>`;
+            errors.slice(0, 20).forEach(e => {
+                log.innerHTML += `<div class="text-red-400">  ✗ ${esc(e.name)}</div>`;
+            });
+        }
+
+    } catch (e) {
+        sub.textContent = "出错: " + e.message;
+    } finally {
         btn.disabled = false;
-        btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 一键下载全部`;
-    };
+        btn.innerHTML = downloadAllBtnHtml();
+    }
+}
+
+function downloadAllBtnHtml() {
+    return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 一键下载全部`;
+}
+
+// 递归扫描本地目录
+async function scanLocalDir(dirHandle, prefix, fileSet) {
+    for await (const [name, handle] of dirHandle.entries()) {
+        const path = prefix ? `${prefix}/${name}` : name;
+        if (handle.kind === "file") {
+            fileSet.add(path);
+        } else if (handle.kind === "directory" && !name.startsWith(".")) {
+            await scanLocalDir(handle, path, fileSet);
+        }
+    }
+}
+
+// 下载单个文件到本地目录
+async function downloadFileToLocal(rootHandle, file) {
+    // 确保子目录存在
+    const parts = file.path.split("/");
+    let currentHandle = rootHandle;
+    for (let i = 0; i < parts.length - 1; i++) {
+        currentHandle = await currentHandle.getDirectoryHandle(parts[i], { create: true });
+    }
+
+    const fileName = parts[parts.length - 1];
+    const fileHandle = await currentHandle.getFileHandle(fileName, { create: true });
+
+    // 从服务器下载
+    const url = `/api/download?group_id=${file.group_id}&file_id=${file.file_id}&sid=${encodeURIComponent(state.wpsSid)}&csrf=${encodeURIComponent(state.csrf)}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+    const blob = await resp.blob();
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+}
+
+// 写 JSON 文件到本地目录
+async function writeJsonFile(dirHandle, name, data) {
+    try {
+        const fileHandle = await dirHandle.getFileHandle(name, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(JSON.stringify(data, null, 2));
+        await writable.close();
+    } catch (e) {
+        console.warn("保存清单失败:", e);
+    }
 }
 
 // ── Tabs ──

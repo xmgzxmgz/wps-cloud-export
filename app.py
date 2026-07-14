@@ -54,10 +54,16 @@ def collect_group_files(client, group_id, group_name, parent_id=0, path_prefix="
     return result
 
 
-def collect_device_files(client, device_id, device_name, parent_id=0, path_prefix="", seen=None):
+def collect_device_files(client, device_id, device_name, group_id=0, parent_id=0, path_prefix="", seen=None):
     """递归收集设备内所有文件"""
     if seen is None:
         seen = {}
+    if group_id == 0:
+        groups = client.get_cloud_groups()
+        for gid, ginfo in groups.items():
+            if ginfo.get("type") == "tmp":
+                group_id = ginfo["id"]
+                break
     params = {"count": "200", "page": "1"}
     if parent_id:
         params["parentid"] = str(parent_id)
@@ -72,7 +78,7 @@ def collect_device_files(client, device_id, device_name, parent_id=0, path_prefi
         fid = f.get("id", f.get("fileid", 0))
         current_path = f"{path_prefix}/{fname}" if path_prefix else fname
         if ftype == "folder":
-            result.extend(collect_device_files(client, device_id, device_name, fid, current_path, seen))
+            result.extend(collect_device_files(client, device_id, device_name, group_id, fid, current_path, seen))
         else:
             full_path = f"设备文档/{device_name}/{current_path}"
             # 去重：同名文件加后缀
@@ -83,7 +89,7 @@ def collect_device_files(client, device_id, device_name, parent_id=0, path_prefi
             else:
                 seen[full_path] = 0
             result.append({
-                "group_id": 928088999,
+                "group_id": group_id,
                 "file_id": fid,
                 "name": fname,
                 "type": ftype,

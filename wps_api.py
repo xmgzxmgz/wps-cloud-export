@@ -166,7 +166,13 @@ class WPSClient:
         """递归获取设备文件树"""
         if depth > max_depth:
             return []
-        # 设备文件通过 parentid 获取子文件
+        if parent_id == 0:
+            self._tmp_group_id = None
+            groups = self.get_cloud_groups()
+            for gid, ginfo in groups.items():
+                if ginfo.get("type") == "tmp":
+                    self._tmp_group_id = ginfo["id"]
+                    break
         params = {"parentid": str(parent_id), "count": "200", "page": "1"}
         data = self._get(DRIVE_BASE, f"/v5/groups/tmp/devices/{device_id}/files", params)
         if isinstance(data, dict) and "error" in data:
@@ -180,7 +186,7 @@ class WPSClient:
                 "type": f.get("ftype", "file"),
                 "size": f.get("fsize", 0),
                 "mtime": f.get("mtime", 0),
-                "group_id": 928088999,
+                "group_id": self._tmp_group_id or 0,
                 "parent_id": parent_id,
             }
             if node["type"] == "folder":

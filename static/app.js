@@ -3,6 +3,7 @@ let state = {
     wpsSid: "",
     csrf: "",
     groups: {},
+    tmpGroupId: 0,
     fileTree: {},
     devices: [],
     roamingFiles: [],
@@ -100,6 +101,7 @@ async function loadGroups() {
 
         data.groups.forEach(g => {
             state.groups[g.id] = g;
+            if (g.type === "tmp") state.tmpGroupId = g.id;
             const opt = document.createElement("option");
             opt.value = g.id;
             opt.textContent = g.name;
@@ -390,7 +392,7 @@ function renderDeviceFiles(files) {
         const fid = f.id || f.fileid;
         const isFolder = ftype === "folder";
         return `<div class="device-row">
-            <input type="checkbox" data-idx="${i}" data-id="${fid}" data-group="928088999"
+            <input type="checkbox" data-idx="${i}" data-id="${fid}"
                    class="h-3.5 w-3.5 rounded-sm border border-input bg-background shadow-sm accent-foreground cursor-pointer flex-shrink-0"
                    onchange="toggleDeviceSelect(${i}, this.checked)" ${state.deviceSelectedFiles.has(i) ? "checked" : ""}>
             <span class="flex-shrink-0">${isFolder ? folderIcon() : fileIcon(ftype)}</span>
@@ -465,7 +467,7 @@ async function downloadDeviceSelected() {
         const fname = f.fname || f.name || `file_${fid}`;
         if (f.ftype === "folder") return; // 跳过文件夹
         items.push({
-            group_id: 928088999,  // tmp 组
+            group_id: state.tmpGroupId || 0,
             file_id: fid,
             name: fname,
             path: fname,

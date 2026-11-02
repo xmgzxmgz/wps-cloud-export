@@ -206,20 +206,54 @@ class WPSClient:
         return self._get(DRIVE_BASE, "/v5/roaming", params)
 
     def get_download_url(self, group_id: int, file_id: int):
+        """获取下载地址。
+
+        返回 (url, reason)：
+          - 成功：url 非空，reason 为空
+          - 失败：url 为 None，reason 是人类可读的原因
+
+        说明：下载地址由服务端按「当前账号对该文件的权限」下发。对于他人共享给你的
+        只读文档，服务端通常根本不会返回 url（或直接 403），这属于所有者的权限设置，
+        不是本工具能绕过的。
+        """
         data = self._get(DRIVE_BASE, f"/v3/groups/{group_id}/files/{file_id}/download")
         if isinstance(data, dict) and "error" in data:
-            return None
+            kind = data.get("error")
+            if kind == "forbidden":
+                return None, "无下载权限：该文件可能为他人共享的只读文档，或所有者已禁止下载"
+            if kind == "auth_failed":
+                return None, "Cookie 已过期，请重新获取 wps_sid"
+            if kind == "not_found":
+                return None, "文件不存在或已被移动/删除"
+            return None, data.get("message") or "获取下载链接失败"
+
         fileinfo = data.get("fileinfo", {}) if isinstance(data, dict) else {}
-        return fileinfo.get("url") or fileinfo.get("static_url")
+        url = fileinfo.get("url") or fileinfo.get("static_url")
+        if url:
+            return url, ""
+
+        # 接口 200 但没给 url：通常是服务端按权限拒绝，附上原始 result 便于排查
+        detail = []
+        if isinstance(data, dict):
+            for k in ("msg", "message", "result", "errmsg"):
+                v = data.get(k)
+                if v not in (None, "", 0):
+                    detail.append("%s=%s" % (k, v))
+        tail = ("：" + " ".join(detail)) if detail else ""
+        return None, "服务端未返回下载地址（该文件可能不允许下载）%s" % tail
 
     def download_file(self, group_id: int, file_id: int):
         """返回 (content_bytes, filename) 或 (None, error_msg)"""
-        url = self.get_download_url(group_id, file_id)
+        url, reason = self.get_download_url(group_id, file_id)
         if not url:
-            return None, "获取下载链接失败"
+            return None, reason or "获取下载链接失败"
         for attempt in range(MAX_RETRIES):
             try:
                 resp = self.session.get(url, stream=True, timeout=300, allow_redirects=True)
+                if resp.status_code == 403:
+                    return None, "无下载权限（HTTP 403）：该文件可能为只读共享，或所有者禁止下载"
+                if resp.status_code == 401:
+                    return None, "Cookie 已过期（HTTP 401），请重新获取 wps_sid"
                 if resp.status_code != 200:
                     if attempt < MAX_RETRIES - 1:
                         time.sleep(2)

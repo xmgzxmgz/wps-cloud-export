@@ -288,7 +288,9 @@ function syncCheckboxes() {
 
 function updateSelectedCount() {
     const count = state.selectedFiles.size;
-    document.getElementById("selected-count").textContent = `已选 ${count} 个文件`;
+    const info = document.getElementById("selected-count");
+    info.textContent = `已选 ${count} 个文件`;
+    info.classList.toggle("is-empty", count === 0);
     document.getElementById("btn-download").disabled = count === 0;
 }
 
@@ -396,7 +398,7 @@ function renderDeviceFiles(files) {
                    class="h-3.5 w-3.5 rounded-sm border border-input bg-background shadow-sm accent-foreground cursor-pointer flex-shrink-0"
                    onchange="toggleDeviceSelect(${i}, this.checked)" ${state.deviceSelectedFiles.has(i) ? "checked" : ""}>
             <span class="flex-shrink-0">${isFolder ? folderIcon() : fileIcon(ftype)}</span>
-            <span class="flex-1 truncate text-sm" title="${esc(name)}">${esc(name)}</span>
+            <span class="row-name flex-1 truncate text-sm" title="${esc(name)}">${esc(name)}</span>
             <span class="flex-shrink-0 text-xs text-muted-foreground w-16 text-right">${formatSize(size)}</span>
         </div>`;
     }).join("")}</div>`;
@@ -408,7 +410,9 @@ function toggleDeviceSelect(idx, checked) {
 }
 function updateDeviceSelectedCount() {
     const n = state.deviceSelectedFiles.size;
-    document.getElementById("device-selected-count").textContent = `已选 ${n} 个文件`;
+    const info = document.getElementById("device-selected-count");
+    info.textContent = `已选 ${n} 个文件`;
+    info.classList.toggle("is-empty", n === 0);
     document.getElementById("btn-download-device").disabled = n === 0;
 }
 function selectAllDevice() {
@@ -493,7 +497,7 @@ async function doBatchDownload(items) {
     progressFill.style.width = "0%";
     progressText.textContent = `准备下载 ${items.length} 个文件...`;
     progressLog.innerHTML = "";
-    downloadResult.classList.add("hidden");
+    downloadResult?.classList.add("hidden");
 
     // 使用 SSE 流式下载
     try {
@@ -613,7 +617,7 @@ async function downloadAll() {
     modal.classList.remove("hidden");
     title.textContent = "一键下载全部";
     fill.style.width = "0%";
-    fill.className = "h-full w-0 rounded-full bg-foreground progress-stripe transition-all duration-300";
+    fill.className = "progress-fill progress-stripe";
     text.textContent = "";
     sub.textContent = "正在获取云端文件列表...";
     log.innerHTML = "";
